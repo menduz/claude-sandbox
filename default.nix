@@ -224,6 +224,7 @@ let
       "SSL_CERT_FILE"
       "NIX_SSL_CERT_FILE"
       "CURL_CA_BUNDLE"
+      "CLAUDE_CODE_OAUTH_TOKEN"
     )
     env_args=()
     for env in "''${whitelisted_envs[@]}"; do
