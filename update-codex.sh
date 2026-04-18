@@ -6,7 +6,7 @@ echo "Checking latest version of @openai/codex..."
 LATEST_VERSION=$(curl -s https://registry.npmjs.org/@openai/codex/latest | jq -r '.version')
 echo "Latest version: $LATEST_VERSION"
 
-# Get current version from default.nix
+# Get current version from codex.nix
 CURRENT_VERSION=$(grep -oP 'version = "\K[^"]*' codex.nix)
 echo "Current version: $CURRENT_VERSION"
 
@@ -17,22 +17,23 @@ fi
 
 echo "New version available: $LATEST_VERSION"
 
-# Download the new tarball and get its hash
-TARBALL_URL="https://registry.npmjs.org/@openai/codex/-/codex-${LATEST_VERSION}.tgz"
+# Download the GitHub release tarball and get its hash
+TARBALL_URL="https://github.com/openai/codex/releases/download/rust-v${LATEST_VERSION}/codex-x86_64-unknown-linux-gnu.tar.gz"
 echo "Downloading $TARBALL_URL..."
 
-# Use nix-prefetch-url to get the correct hash
 NEW_HASH=$(nix-prefetch-url --type sha256 "$TARBALL_URL")
-echo "New hash: $NEW_HASH"
+# Convert to SRI format to match the existing hash style in codex.nix
+SRI_HASH=$(nix hash to-sri --type sha256 "$NEW_HASH")
+echo "New hash: $SRI_HASH"
 
-# Update default.nix with new version and hash
-echo "Updating default.nix..."
-sed -i "s/version = \".*\";/version = \"$LATEST_VERSION\";/" codex.nix
-sed -i "s/sha256 = \".*\";/sha256 = \"$NEW_HASH\";/" codex.nix
+# Update codex.nix with new version and hash
+echo "Updating codex.nix..."
+sed -i "s|version = \".*\";|version = \"$LATEST_VERSION\";|" codex.nix
+sed -i "s|latestHash = \".*\";|latestHash = \"$SRI_HASH\";|" codex.nix
 
-echo "Updated default.nix:"
+echo "Updated codex.nix:"
 echo "  Version: $CURRENT_VERSION -> $LATEST_VERSION"
-echo "  Hash: updated"
+echo "  Hash: $SRI_HASH"
 
 echo ""
 echo "You can now run 'nix build' to test the update."

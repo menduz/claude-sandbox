@@ -7,9 +7,13 @@
 , fetchurl
 , cacert
 , ripgrep
+, patchelf
+, callPackage
 }:
 
 let
+  claudeCode = callPackage ./claude.nix { runtime = "native"; };
+
   # Create the sandboxed wrapper script
   sandboxWrapper = writeShellScript "claude-sandbox" ''
     #!${stdenv.shell}
@@ -18,6 +22,9 @@ let
     ENABLE_FUSE=0
     ENABLE_SSH_GIT=0
     ENABLE_LIBVIRT=0
+    ENABLE_DOCKER=0
+    ENABLE_GH=0
+    DEBUG=0
     CLAUDE_ARGS=()
     
     while [[ $# -gt 0 ]]; do
@@ -32,6 +39,19 @@ let
           ;;
         --libvirt)
           ENABLE_LIBVIRT=1
+          shift
+          ;;
+        --docker)
+          ENABLE_DOCKER=1
+          shift
+          ;;
+        --enable-gh)
+          ENABLE_GH=1
+          ENABLE_SSH_GIT=1
+          shift
+          ;;
+        --debug)
+          DEBUG=1
           shift
           ;;
         *)
@@ -64,6 +84,7 @@ let
       "ro:/bin/sh"
       "ro:/usr/bin/env"     # env command
       "$SANDBOX_TMP:/tmp"
+      "/home/$USER/.cloudflared"
     )
     HOME_ALLOW=(
       ".claude"
@@ -77,9 +98,10 @@ let
       ".cursor"
       ".docker"
       ".go"
+      ".gradle"
       ".java"
-      ".nix-defexpr"
       ".nix-channels"
+      ".nix-defexpr"
       ".nix-profile"
       ".npm"
       ".yarn"
@@ -182,6 +204,27 @@ let
         ALLOWLIST+=( "/run/user/$(id -u)/libvirt/libvirt-sock" )
       fi
     fi
+
+    if [ "$ENABLE_GH" -eq 1 ]; then
+      [ "$DEBUG" -eq 1 ] && printf "[sandbox] --enable-gh: running 'gh auth token'...\n" >&2
+      GH_TOKEN=$(gh auth token 2>/dev/null)
+      if [ -n "$GH_TOKEN" ]; then
+        [ "$DEBUG" -eq 1 ] && printf "[sandbox] --enable-gh: got token (%d chars), will set GH_TOKEN\n" "''${#GH_TOKEN}" >&2
+      else
+        printf "[sandbox] --enable-gh: WARNING - 'gh auth token' failed. Are you logged in?\n" >&2
+      fi
+    fi
+
+    if [ "$ENABLE_DOCKER" -eq 1 ]; then
+      # Allow access to Docker socket
+      if [ -S "/var/run/docker.sock" ]; then
+        ALLOWLIST+=( "/var/run/docker.sock" )
+      fi
+      # Some systems use /run instead of /var/run
+      if [ -S "/run/docker.sock" ]; then
+        ALLOWLIST+=( "/run/docker.sock" )
+      fi
+    fi
     
     # Always read config file if it exists
     CONFIG_FILE="$HOME/.config/claude-sandbox/config.json"
@@ -233,6 +276,10 @@ let
       fi
     done
     env_args+=( --setenv "NODE_ENV" "production" )
+    if [ "$ENABLE_GH" -eq 1 ] && [ -n "$GH_TOKEN" ]; then
+      env_args+=( --setenv "GH_TOKEN" "$GH_TOKEN" )
+      [ "$DEBUG" -eq 1 ] && printf "[sandbox] GH_TOKEN added to env_args\n" >&2
+    fi
     env_args+=( --setenv "SHELL" "$(readlink $(which $SHELL))" )
     env_args+=( --setenv "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY" "1")
     env_args+=( --setenv "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" "1")
@@ -253,6 +300,22 @@ let
       if [ -n "$GPG_TTY" ]; then
         env_args+=( --setenv "GPG_TTY" "$GPG_TTY" )
       fi
+    fi
+
+    if [ "$DEBUG" -eq 1 ]; then
+      printf "[sandbox] ALLOWLIST (%d entries):\n" "''${#ALLOWLIST[@]}" >&2
+      for item in "''${ALLOWLIST[@]}"; do
+        printf "[sandbox]   %s\n" "$item" >&2
+      done
+      printf "[sandbox] env_args (%d entries):\n" "''${#env_args[@]}" >&2
+      for item in "''${env_args[@]}"; do
+        case "$item" in
+          --setenv) printf "[sandbox]   --setenv " >&2 ;;
+          GH_TOKEN) printf "GH_TOKEN=<redacted>\n" >&2 ;;
+          *) printf "%s " "$item" >&2 ;;
+        esac
+      done
+      printf "\n" >&2
     fi
 
     # Build bwrap argument list
@@ -296,58 +359,32 @@ let
 
     # Use the claude executable from the npm package
     if [ $DRY_RUN ]; then
-      echo ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "''${CLAUDE_ARGS[@]}"
+      echo ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-bin" "''${CLAUDE_ARGS[@]}"
     elif [ $START_SHELL ]; then
       exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- $(readlink $(which $SHELL))
     else
-      exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-achtung-achtung" "''${CLAUDE_ARGS[@]}"
+      exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/claude-bin" "''${CLAUDE_ARGS[@]}"
     fi
   '';
 
 in stdenv.mkDerivation rec {
   pname = "claude-sandbox";
-  version = "2.0.69";
+  version = "2.1.114";
 
-  src = fetchurl {
-    url = "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-${version}.tgz";
-    sha256 = "0crgkc9bbg369wp847s1vgwzmyl3l3wzxsb9jazrp08w9799r4kc";
-  };
-  
-  nativeBuildInputs = [ makeWrapper ripgrep ];
+  nativeBuildInputs = [ makeWrapper ripgrep patchelf ];
   buildInputs = [ nodejs_22 bubblewrap cacert ];
+
+  src = builtins.filterSource (path: type: false) ./.;
 
   # No build phase needed
   dontBuild = true;
 
   installPhase = ''
     # Create directories
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code
     mkdir -p $out/bin
 
     # Copy package contents
-    cp -r * $out/lib/node_modules/@anthropic-ai/claude-code/
-
-    # Create backups directory and move scripts and vendor folders
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/backups
-    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/scripts" ]; then
-      mv $out/lib/node_modules/@anthropic-ai/claude-code/scripts $out/lib/node_modules/@anthropic-ai/claude-code/backups/
-    fi
-    if [ -d "$out/lib/node_modules/@anthropic-ai/claude-code/vendor" ]; then
-      mv $out/lib/node_modules/@anthropic-ai/claude-code/vendor $out/lib/node_modules/@anthropic-ai/claude-code/backups/
-    fi
-
-    # Create vendor/ripgrep directory and symlink rg binary
-    mkdir -p $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux
-    ln -s ${ripgrep}/bin/rg $out/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/x64-linux/rg
-
-    cat > $out/bin/claude-achtung-achtung << EOF
-#!/usr/bin/env node
-process.env.SSL_CERT_FILE = process.env.SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.NIX_SSL_CERT_FILE = process.env.NIX_SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.CURL_CA_BUNDLE = process.env.CURL_CA_BUNDLE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-import('$out/lib/node_modules/@anthropic-ai/claude-code/cli.js');
-EOF
-    chmod +x $out/bin/claude-achtung-achtung
+    cp -r ${claudeCode}/bin/claude $out/bin/claude-bin
 
     # Create our sandboxed wrapper
     cp ${sandboxWrapper} $out/bin/claude-sandbox
@@ -358,7 +395,7 @@ EOF
 
     # Substitute the $out placeholder with actual output path
     substituteInPlace $out/bin/claude-sandbox \
-      --replace '$out/bin/claude-achtung-achtung' "$out/bin/claude-achtung-achtung"
+      --replace '$out/bin/claude-bin' "$out/bin/claude-bin"
   '';
 
   meta = with lib; {

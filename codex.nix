@@ -1,25 +1,32 @@
-{ lib
-, stdenv
-, nodejs_22
-, bubblewrap
-, makeWrapper
-, writeShellScript
-, fetchurl
-, cacert
-, ripgrep
-}:
+{
+  autoPatchelfHook,
+  bubblewrap,
+  cacert,
+  fetchurl, 
+  gcc-unwrapped, 
+  lib, 
+  libcap, 
+  makeWrapper,
+  nodejs_22,
+  openssl, 
+  ripgrep,
+  stdenv, 
+  writeShellScript,
+  zlib,
+}: let
+  latestHash = "sha256-8FOsgenGdpkg+e41ZqutR6sIVut+55JChoFmTs4RNDA=";
 
-let
   # Create the sandboxed wrapper script
   sandboxWrapper = writeShellScript "codex-sandbox" ''
     #!${stdenv.shell}
-    
+
     # Parse command line flags
     ENABLE_FUSE=0
     ENABLE_SSH_GIT=0
     ENABLE_LIBVIRT=0
+    ENABLE_DOCKER=0
     CODEX_ARGS=()
-    
+
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --fuse)
@@ -34,13 +41,17 @@ let
           ENABLE_LIBVIRT=1
           shift
           ;;
+        --docker)
+          ENABLE_DOCKER=1
+          shift
+          ;;
         *)
           CODEX_ARGS+=("$1")
           shift
           ;;
       esac
     done
-    
+
     # Create isolated sandbox home directory
     SANDBOX_HOME="/tmp/codex-sandbox-home-$$"
     SANDBOX_TMP="/tmp/codex-sandbox-tmp-$$"
@@ -50,10 +61,10 @@ let
     mkdir -p "$SANDBOX_HOME"
     mkdir -p "$SANDBOX_HOME/.cache"
     mkdir -p "$SANDBOX_HOME/.config"
-    # Make sure the working directory path exists in the sandbox  
+    # Make sure the working directory path exists in the sandbox
     mkdir -p "$SANDBOX_HOME/$(echo "$PWD" | sed "s|^/home/$USER||")"
     USER=$(whoami)
-    
+
     # Only allow access to current project directory and essential system files
     ALLOWLIST=(
       "$SANDBOX_HOME:/home/$USER"
@@ -68,18 +79,20 @@ let
     HOME_ALLOW=(
       ".codex"
       ".codex.json"
+      ".config/codex"
+      ".config/codex-sandbox"
+
       ".android"
       ".ansible"
       ".cargo"
-      ".config/codex"
-      ".config/codex-sandbox"
       ".config/nix"
       ".cursor"
       ".docker"
       ".go"
+      ".gradle"
       ".java"
-      ".nix-defexpr"
       ".nix-channels"
+      ".nix-defexpr"
       ".nix-profile"
       ".npm"
       ".yarn"
@@ -136,7 +149,7 @@ let
       # Allow access to /dev/fuse for FUSE operations
       ALLOWLIST+=( "/dev/fuse" )
     fi
-    
+
     if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
       # Allow access to SSH and git config in real home
       if [ -d "$HOME/.ssh" ]; then
@@ -168,7 +181,7 @@ let
         ALLOWLIST+=( "/run/user/$(id -u)/gnupg/S.gpg-agent" )
       fi
     fi
-    
+
     if [ "$ENABLE_LIBVIRT" -eq 1 ]; then
       # Allow access to libvirt socket
       if [ -S "/var/run/libvirt/libvirt-sock" ]; then
@@ -182,7 +195,18 @@ let
         ALLOWLIST+=( "/run/user/$(id -u)/libvirt/libvirt-sock" )
       fi
     fi
-    
+
+    if [ "$ENABLE_DOCKER" -eq 1 ]; then
+      # Allow access to Docker socket
+      if [ -S "/var/run/docker.sock" ]; then
+        ALLOWLIST+=( "/var/run/docker.sock" )
+      fi
+      # Some systems use /run instead of /var/run
+      if [ -S "/run/docker.sock" ]; then
+        ALLOWLIST+=( "/run/docker.sock" )
+      fi
+    fi
+
     # Always read config file if it exists
     CONFIG_FILE="$HOME/.config/codex-sandbox/config.json"
     if [ -f "$CONFIG_FILE" ]; then
@@ -198,7 +222,7 @@ let
               ALLOWLIST+=( "$expanded_folder" )
             fi
           done < <(jq -r '.includeFolders[]? // empty' "$CONFIG_FILE" 2>/dev/null)
-          
+
           # Read includeHomePatterns array
           while IFS= read -r pattern; do
             # Add to HOME_ALLOW if it exists
@@ -237,7 +261,7 @@ let
     env_args+=( --setenv "DISABLE_ERROR_REPORTING" "1")
     env_args+=( --setenv "DISABLE_BUG_COMMAND" "1")
     env_args+=( --setenv "DISABLE_TELEMETRY" "1")
-    
+
     # Pass SSH_AUTH_SOCK and GPG variables if --ssh-git is enabled
     if [ "$ENABLE_SSH_GIT" -eq 1 ]; then
       if [ -n "$SSH_AUTH_SOCK" ]; then
@@ -273,7 +297,7 @@ let
 
     for p in "''${ALLOWLIST[@]}"; do
       if [[ "$p" == ro:* ]]; then
-        p="''${p#ro:}"; 
+        p="''${p#ro:}";
         if [ -e "$p" ]; then
           args+=( --ro-bind "$p" "$p" )
         fi
@@ -299,67 +323,51 @@ let
       exec ${bubblewrap}/bin/bwrap "''${args[@]}" -- "$out/bin/codex-x" "''${CODEX_ARGS[@]}"
     fi
   '';
+in
+  stdenv.mkDerivation rec {
+    pname = "codex-sandbox";
+    version = "0.121.0";
 
-in stdenv.mkDerivation rec {
-  pname = "codex-sandbox";
-  version = "0.77.0";
+    src = fetchurl {
+      url = "https://github.com/openai/codex/releases/download/rust-v${version}/codex-x86_64-unknown-linux-gnu.tar.gz";
+      sha256 = latestHash;
+    };
 
-  src = fetchurl {
-    url = "https://registry.npmjs.org/@openai/codex/-/codex-${version}.tgz";
-    sha256 = "0sh0477zbfnl20jasrlw6qn7aj7j8xfp2888s3q8sanr2yxnh3vv";
-  };
-  
-  
-  nativeBuildInputs = [ makeWrapper ripgrep ];
-  buildInputs = [ nodejs_22 bubblewrap cacert ];
+    nativeBuildInputs = [makeWrapper ripgrep autoPatchelfHook  libcap openssl gcc-unwrapped.lib zlib];
+    buildInputs = [nodejs_22 bubblewrap];
 
-  # No build phase needed
-  dontBuild = true;
+    # No build phase needed
+    sourceRoot = ".";
 
-  installPhase = ''
-    # Create directories
-    mkdir -p $out/lib/node_modules/@openai/codex
-    mkdir -p $out/bin
+    installPhase = ''
+          runHook preInstall
 
-    # Copy package contents
-    cp -r * $out/lib/node_modules/@openai/codex/
+          # Create directories
+          mkdir -p $out/bin
 
-    # Create vendor folders
-    #if [ -d "$out/lib/node_modules/@openai/codex/vendor" ]; then
-    #  mv $out/lib/node_modules/@openai/codex/vendor $out/lib/node_modules/@openai/codex/vendor/
-    #fi
 
-    # Create vendor/ripgrep directory and symlink rg binary
-    #rm $out/lib/node_modules/@openai/codex/bin/rg
-    #ln -s ${ripgrep}/bin/rg $out/lib/node_modules/@openai/codex/bin/rg
+          install -Dm755 codex-x86_64-unknown-linux-gnu $out/bin/codex-x
 
-    cat > $out/bin/codex-x << EOF
-#!/usr/bin/env node
-process.env.SSL_CERT_FILE = process.env.SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.NIX_SSL_CERT_FILE = process.env.NIX_SSL_CERT_FILE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-process.env.CURL_CA_BUNDLE = process.env.CURL_CA_BUNDLE || '${cacert}/etc/ssl/certs/ca-bundle.crt';
-import('$out/lib/node_modules/@openai/codex/bin/codex.js');
-EOF
-    chmod +x $out/bin/codex-x
+          runHook postInstall          # Create our sandboxed wrapper
 
-    # Create our sandboxed wrapper
-    cp ${sandboxWrapper} $out/bin/codex-sandbox
-    chmod +x $out/bin/codex-sandbox
+          cp ${sandboxWrapper} $out/bin/codex-sandbox
 
-    # Alias the sandboxed codex to the original codex
-    ln -s $out/bin/codex-sandbox $out/bin/codex
+          chmod +x $out/bin/codex-sandbox
 
-    # Substitute the $out placeholder with actual output path
-    substituteInPlace $out/bin/codex-sandbox \
-      --replace '$out/bin/codex-x' "$out/bin/codex-x"
-  '';
+          # Alias the sandboxed codex to the original codex
+          ln -s $out/bin/codex-sandbox $out/bin/codex
 
-  meta = with lib; {
-    description = "Sandboxed codex environment using bubblewrap";
-    homepage = "https://github.com/openai/codex";
-    license = licenses.mit;
-    maintainers = [ ];
-    platforms = platforms.linux;
-    mainProgram = "codex-sandbox";
-  };
-}
+          # Substitute the $out placeholder with actual output path
+          substituteInPlace $out/bin/codex-sandbox \
+            --replace '$out/bin/codex-x' "$out/bin/codex-x"
+    '';
+
+    meta = with lib; {
+      description = "Sandboxed codex environment using bubblewrap";
+      homepage = "https://github.com/openai/codex";
+      license = licenses.mit;
+      maintainers = [];
+      platforms = platforms.linux;
+      mainProgram = "codex-sandbox";
+    };
+  }
