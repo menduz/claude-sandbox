@@ -18,7 +18,7 @@ fi
 echo "New version available: $LATEST_VERSION"
 
 # Download the GitHub release tarball and get its hash
-TARBALL_URL="https://github.com/openai/codex/releases/download/rust-v${LATEST_VERSION}/codex-x86_64-unknown-linux-gnu.tar.gz"
+TARBALL_URL="https://github.com/openai/codex/releases/download/rust-v${LATEST_VERSION}/codex-package-x86_64-unknown-linux-musl.tar.gz"
 echo "Downloading $TARBALL_URL..."
 
 NEW_HASH=$(nix-prefetch-url --type sha256 "$TARBALL_URL")

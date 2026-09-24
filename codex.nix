@@ -7,6 +7,7 @@
   lib, 
   libcap, 
   makeWrapper,
+  ncurses,
   nodejs_22,
   openssl, 
   ripgrep,
@@ -14,7 +15,7 @@
   writeShellScript,
   zlib,
 }: let
-  latestHash = "sha256-8FOsgenGdpkg+e41ZqutR6sIVut+55JChoFmTs4RNDA=";
+  latestHash = "sha256-i3EVIL7d84VGe42k0sk3NmN8a6HkaBHPDYYGt8SQtvY=";
 
   # Create the sandboxed wrapper script
   sandboxWrapper = writeShellScript "codex-sandbox" ''
@@ -326,15 +327,16 @@
 in
   stdenv.mkDerivation rec {
     pname = "codex-sandbox";
-    version = "0.121.0";
+    version = "0.156.1";
 
     src = fetchurl {
-      url = "https://github.com/openai/codex/releases/download/rust-v${version}/codex-x86_64-unknown-linux-gnu.tar.gz";
+      url = "https://github.com/openai/codex/releases/download/rust-v${version}/codex-package-x86_64-unknown-linux-musl.tar.gz";
       sha256 = latestHash;
     };
 
     nativeBuildInputs = [makeWrapper ripgrep autoPatchelfHook  libcap openssl gcc-unwrapped.lib zlib];
-    buildInputs = [nodejs_22 bubblewrap];
+    # ncurses provides libtinfo for the bundled zsh
+    buildInputs = [nodejs_22 bubblewrap ncurses];
 
     # No build phase needed
     sourceRoot = ".";
@@ -343,10 +345,15 @@ in
           runHook preInstall
 
           # Create directories
-          mkdir -p $out/bin
+          mkdir -p $out/bin $out/libexec/codex
 
+          # Install the full codex package, preserving its layout. codex resolves
+          # helpers (bin/codex-code-mode-host, codex-resources/, codex-path/)
+          # relative to its own executable, so they must stay together.
+          cp -r bin codex-resources codex-path codex-package.json $out/libexec/codex/
+          chmod -R u+w $out/libexec/codex
 
-          install -Dm755 codex-x86_64-unknown-linux-gnu $out/bin/codex-x
+          ln -s $out/libexec/codex/bin/codex $out/bin/codex-x
 
           runHook postInstall          # Create our sandboxed wrapper
 
@@ -359,7 +366,7 @@ in
 
           # Substitute the $out placeholder with actual output path
           substituteInPlace $out/bin/codex-sandbox \
-            --replace '$out/bin/codex-x' "$out/bin/codex-x"
+            --replace '$out/bin/codex-x' "$out/libexec/codex/bin/codex"
     '';
 
     meta = with lib; {

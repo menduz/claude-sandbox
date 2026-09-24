@@ -26,7 +26,13 @@ let
     ENABLE_GH=0
     DEBUG=0
     CLAUDE_ARGS=()
-    
+
+    # Allow enabling gh via environment variable (equivalent to --enable-gh).
+    if [ "''${GH_ENABLE:-0}" = "1" ]; then
+      ENABLE_GH=1
+      ENABLE_SSH_GIT=1
+    fi
+
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --fuse)
