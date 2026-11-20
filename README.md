@@ -1,45 +1,33 @@
-# Sandboxed Claude Code
+# Claude Code and Codex for Nix
 
-This project provides a sandboxed environment for running Claude Code using Nix and bubblewrap.
+Nix packages of [Claude Code](https://www.anthropic.com/claude-code) and
+[Codex](https://github.com/openai/codex), from the release binaries. The
+packages have no sandbox: run them in a sandbox of your own (bubblewrap,
+gVisor, a virtual machine).
 
-** WARNING **: It was not properly security reviewed. It's just a stub. Don't use it outside of a VM.
+## Packages
 
+- `claude` (`claude.nix`): the native binary of Claude Code. The wrapper
+  turns off the auto-updater, the telemetry, the error reports, the feedback
+  survey and the other traffic that is not necessary.
+- `codex` (`codex.nix`): the Linux package of the release of Codex, with its
+  helpers in `libexec/codex`.
 
-## Usage
-
-On NixOS systems, run `nix run github:longregen/claude-sandbox`
-
-## What's Mounted
-
-### Essential System Files
-- `/etc/ssl` - SSL certificates for HTTPS
-- `/etc/resolv.conf` - DNS resolution
-- `/nix` - Nix store (read-only)
-
-### Development Directories
-- Current working directory (read-write)
-- Development cache directories (if they exist):
-  - `.go`, `.pip`, `.deno`, `.pnpm`, `.yarn`, `.uv`
-  - `.huggingface`, `.cached-nix-shell`, `.nix`, `.gradle`, `.zig`
-  - Language server caches: `.gopls`, `.jedi`, `.lua-language-server`, etc.
-
-## Development
-
-The sandbox configuration is in `default.nix`. Key components:
-
-- `sandboxWrapper`: Shell script that sets up the bubblewrap environment
-- `ALLOWLIST`: Directories and files that are mounted in the sandbox
-
-## Debugging
-
-To see what the sandbox would execute without running it:
-```bash
-DRY_RUN=1 ./result/bin/claude-sandbox --help
+```console
+$ nix build .#claude
+$ nix build .#codex
 ```
 
-To start a shell in the sandbox environment:
-```bash
-START_SHELL=1 ./result/bin/claude-sandbox
+From a different flake, without the inputs of this flake:
 
+```nix
+claude = pkgs.callPackage "${inputs.claude-sandbox}/claude.nix" { };
+codex = pkgs.callPackage "${inputs.claude-sandbox}/codex.nix" { };
+```
 
-Tip: useful to run with strace to know what's going on.
+Claude Code is unfree: set `nixpkgs.config.allowUnfree`.
+
+## Updates
+
+- `nix run .#update-claude`: the latest version of Claude Code.
+- `./update-codex.sh`: the latest version of Codex.

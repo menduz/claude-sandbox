@@ -1,5 +1,5 @@
 {
-  description = "Claude Sandbox - Sandboxed Claude API environment using bubblewrap";
+  description = "Claude Code and Codex, without a sandbox: run them in a sandbox of your own";
 
   inputs = {
     nixpkgs.url = "git+ssh://gitea/mirrors/nixpkgs?shallow=1&ref=nixos-unstable";
@@ -10,23 +10,16 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        claude-sandbox = pkgs.callPackage ./default.nix { };
+        claude = pkgs.callPackage ./claude.nix { };
+        codex = pkgs.callPackage ./codex.nix { };
       in
       {
         packages = {
-          default = claude-sandbox;
-          claude-sandbox = claude-sandbox;
+          default = claude;
+          inherit claude codex;
         };
 
         apps = {
-          default = {
-            type = "app";
-            program = "${claude-sandbox}/bin/claude-sandbox";
-          };
-          claude-sandbox = {
-            type = "app";
-            program = "${claude-sandbox}/bin/claude-sandbox";
-          };
           update-claude = {
             type = "app";
             program = "${pkgs.writeShellScript "update-claude" ''
@@ -37,13 +30,13 @@
         };
 
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            claude-sandbox
-            nodejs_22
+          buildInputs = [
+            claude
+            codex
           ];
           
           shellHook = ''
-            echo "🤖 Claude Sandbox Development Environment"
+            echo "Claude Code and Codex"
           '';
         };
       });
